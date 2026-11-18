@@ -1,11 +1,22 @@
 {
   "name": "gpu-job",
   "displayName": "GPU Job",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run heavy GPU jobs (renders, bakes, ML inference) on a shared remote GPU box over SSH: preflight checks, lanes with VRAM caps, a guard that honours a STOP file and keeps a status file, and copy-only fetches.",
-  "author": { "name": "skyeyesec333" },
+  "author": {
+    "name": "skyeyesec333"
+  },
   "license": "MIT",
   "repository": "https://github.com/skyeyesec333/gpu-job",
   "homepage": "https://github.com/skyeyesec333/gpu-job",
-  "keywords": ["gpu", "render", "blender", "cycles", "ssh", "nvidia", "render-farm", "shared-gpu"]
+  "keywords": [
+    "gpu",
+    "render",
+    "blender",
+    "cycles",
+    "ssh",
+    "nvidia",
+    "render-farm",
+    "shared-gpu"
+  ]
 }

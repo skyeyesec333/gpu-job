@@ -38,15 +38,18 @@ Just ask:
 - "Is the worker free? Run the depth model on these three images there"
 - "Check on the render and pull the finished frames back"
 
-The scripts also work by hand:
+The scripts also work by hand. They live in the skill's `scripts/` folder, not on your PATH: `~/.claude/skills/gpu-job/scripts/` for a plain-skill install, `${CLAUDE_PLUGIN_ROOT}/skills/gpu-job/scripts/` inside Claude Code for a plugin install.
 
 ```sh
-gpu-job.sh preflight gpu1
-gpu-job.sh run gpu1 --id garden-01 --purpose "Night garden" --eta 90 --put garden.blend \
-  --frames 1-120 --chunk 10 -- ~/blender/blender -b in/garden.blend -o //out/f_#### -s {start} -e {end} -a
-gpu-job.sh status gpu1 garden-01
-gpu-job.sh fetch gpu1 garden-01 ./renders/garden
+S=~/.claude/skills/gpu-job/scripts
+$S/gpu-job.sh preflight gpu1
+$S/gpu-job.sh run gpu1 --id garden-01 --purpose "Night garden" --eta 90 --put garden.blend \
+  --frames 1-120 --chunk 10 -- '~/blender/blender' -b in/garden.blend -o out/f_#### -s '{start}' -e '{end}' -a
+$S/gpu-job.sh status gpu1 garden-01
+$S/gpu-job.sh fetch gpu1 garden-01 ./renders/garden
 ```
+
+The command runs in the job's folder on the worker: write results to `out/` (relative), and quote a `~/` program path so your own shell doesn't expand it.
 
 ## Requirements
 

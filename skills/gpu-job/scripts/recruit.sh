@@ -13,7 +13,21 @@ die() { echo "recruit: $*" >&2; exit 1; }
 # What a remote machine reports is untrusted: keep printable plain text only, and numbers as digits only.
 clean() { LC_ALL=C tr -cd '[:alnum:] ._()@:/+-' <<<"$1"; }
 digits() { [[ $1 =~ ^[0-9]+$ ]] && echo "$1" || echo ""; }
+# Multi-line remote text (ssh errors, the remote checks' own lines): tab, newline and printable ASCII only,
+# so no escape sequence from the far side reaches the terminal (or the agent reading it) intact.
+cleanlines() { LC_ALL=C tr -cd '\11\12\40-\176'; }
+# accept-new: the first connection to a machine records its host key in ~/.ssh/known_hosts; a changed key
+# later is refused, as usual. Right for machines you are recruiting yourself on your own tailnet or LAN.
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new)
+rssh() { ssh "${SSH_OPTS[@]}" -- "$@"; }
+valid_target() { [[ $1 =~ ^[A-Za-z0-9._@-]+$ && $1 != -* ]] || die "ssh target: user@machine or a Host alias (letters, digits, . _ - @), not starting with '-'"; }
+detect_os() {  # Linux, Darwin, Windows, or unknown
+  local os; os=$(rssh "$1" "uname -s" 2>/dev/null | tr -d '\r' | cleanlines | head -1)
+  case "$os" in Linux|Darwin) echo "$os"; return;; esac
+  # Windows OpenSSH runs cmd by default (where `ver` works) or PowerShell if the owner changed it (`cmd /c ver`).
+  local v; v=$({ rssh "$1" "ver"; rssh "$1" "cmd /c ver"; } 2>/dev/null | cleanlines)
+  case "$v" in *"Microsoft Windows"*) echo Windows;; *) echo unknown;; esac
+}
 
 scan() {
   command -v tailscale >/dev/null || die "tailscale is not installed here (https://tailscale.com/download), or use LAN addresses with 'probe'"
@@ -47,20 +61,15 @@ probe() {
   local t=${1:?ssh target, e.g. user@machine}
   echo "== $t"
   local err; err=$(mktemp)
-  if ! ssh "${SSH_OPTS[@]}" "$t" "exit 0" 2>"$err"; then
-    sed 's/^/   ssh: /' "$err"; rm -f "$err"
+  if ! rssh "$t" "exit 0" 2>"$err"; then
+    cleanlines < "$err" | sed 's/^/   ssh: /'; rm -f "$err"
     echo "NOT READY  key-only SSH failed. See references/recruit.md, section 2 (SSH server, user, key)."
     return 1
   fi
   rm -f "$err"
-  local os; os=$(ssh "${SSH_OPTS[@]}" "$t" "uname -s" 2>/dev/null | tr -d '\r')
-  # Windows OpenSSH runs cmd by default (where `ver` works) or PowerShell if the owner changed it (`cmd /c ver`).
-  if [ -z "$os" ]; then
-    local v; v=$({ ssh "${SSH_OPTS[@]}" "$t" "ver"; ssh "${SSH_OPTS[@]}" "$t" "cmd /c ver"; } 2>/dev/null)
-    [[ $v == *[Ww]indows* ]] && os=Windows
-  fi
-  echo "ok    ssh with key, OS: ${os:-unknown}"
-  local g; g=$(ssh "${SSH_OPTS[@]}" "$t" "nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader,nounits" 2>/dev/null | tr -d '\r' | head -1)
+  local os; os=$(detect_os "$t")
+  echo "ok    ssh with key, OS: $os"
+  local g; g=$(rssh "$t" "nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader,nounits" 2>/dev/null | tr -d '\r' | head -1)
   if [ -n "$g" ]; then
     IFS=, read -r name total free drv <<<"$g"
     name=$(clean "$name"); total=$(digits "${total// /}"); free=$(digits "${free// /}"); drv=$(clean "$drv")
@@ -70,11 +79,11 @@ probe() {
   fi
   case $os in
     Linux|Darwin)
-      ssh "${SSH_OPTS[@]}" "$t" 'df -Pk ~ | awk "NR==2{printf \"ok    %d GB free in the home folder\n\", \$4/1048576}";
+      rssh "$t" 'df -Pk ~ | awk "NR==2{printf \"ok    %d GB free in the home folder\n\", \$4/1048576}";
         bl=""; for b in blender ~/blender/blender ~/blender*/blender /opt/blender*/blender /snap/bin/blender; do command -v "$b" >/dev/null 2>&1 && { bl=$("$b" -v 2>/dev/null | head -1); echo "info  blender: $bl ($b)"; break; }; done;
         [ -n "$bl" ] || echo "info  no blender found in the usual places (only matters for Blender jobs)";
         command -v rsync >/dev/null && echo "ok    rsync present" || echo "WARN  no rsync on the worker: fetch needs it";
-        id -nG | grep -qwE "sudo|wheel|admin" && echo "WARN  this user is an administrator: a plain guest user is safer for jobs" || echo "ok    plain user (not an administrator)"' 2>/dev/null ;;
+        id -nG | grep -qwE "sudo|wheel|admin" && echo "WARN  this user is an administrator: a plain guest user is safer for jobs" || echo "ok    plain user (not an administrator)"' 2>/dev/null | cleanlines ;;
     Windows)
       # Sent as -EncodedCommand (UTF-16LE base64) so neither cmd nor PowerShell re-reads the quotes.
       local ps='$d=(Get-PSDrive C).Free/1GB; "ok    {0:N0} GB free on C:" -f $d
@@ -83,21 +92,31 @@ if($b){"info  blender: "+$b.FullName}else{"info  no blender in Program Files (on
 $l=powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE | Select-String "Current AC Power Setting Index"
 if($l){$p=[Convert]::ToInt32((($l.Line -split ": ")[1]).Trim(),16); if($p -gt 0){"WARN  sleeps after $($p/60) min idle on mains power: a sleeping PC drops jobs (owner: Settings > System > Power)"}else{"ok    does not sleep on mains power"}}'
       local enc; enc=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')
-      ssh "${SSH_OPTS[@]}" "$t" "powershell -NoProfile -NonInteractive -EncodedCommand $enc" 2>/dev/null | tr -d '\r'
+      rssh "$t" "powershell -NoProfile -NonInteractive -EncodedCommand $enc" 2>/dev/null | tr -d '\r' | cleanlines
       echo "info  Windows: the job scripts do not drive it; follow references/windows.md" ;;
+    *) echo "info  could not tell the OS (no uname, no ver): check by hand before adding it" ;;
   esac
   [ -n "$g" ] && echo "READY  $t can be added to gpu-workers.json" || echo "NOT READY  fix the GPU line above first"
 }
 
 stanza() {
   local n=${1:?name} t=${2:?ssh target}
-  [[ $n =~ ^[A-Za-z0-9._-]+$ && $t =~ ^[A-Za-z0-9._@-]+$ ]] || die "name and target: letters, digits, . _ - @ only"
+  [[ $n =~ ^[A-Za-z0-9._-]+$ ]] || die "name: letters, digits, . _ - only"
+  valid_target "$t"
   probe "$t" || exit 1
-  local os; os=$(ssh "${SSH_OPTS[@]}" "$t" "uname -s" 2>/dev/null | tr -d '\r'); [ -n "$os" ] || os=Windows
-  local g; g=$(ssh "${SSH_OPTS[@]}" "$t" "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits" 2>/dev/null | tr -d '\r' | head -1)
+  local os; os=$(detect_os "$t")
+  case "$os" in Linux|Windows) ;; *) die "OS is '$os': write this worker's entry by hand (see references/config.md)";; esac
+  local g; g=$(rssh "$t" "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits" 2>/dev/null | tr -d '\r' | head -1)
   IFS=, read -r name total <<<"$g"; name=$(clean "$name"); total=$(digits "${total// /}")
   local base=${total:-8192}; local cap=$(( base * 6 / 10 )) need=$(( base * 7 / 10 ))
-  local los=linux scratch='~/gpu-work'; [ "$os" = Windows ] && { los=windows; scratch='C:\\Users\\'"${t%@*}"'\\gpu-work'; }
+  # shellcheck disable=SC2088 # a literal "~/" for the config: the scripts expand it on the worker
+  local los=linux scratch='~/gpu-work'
+  if [ "$os" = Windows ]; then
+    los=windows
+    # The user's folder is only known when the target names the user; otherwise leave a placeholder to fill in.
+    local u="<user>"; case "$t" in *@*) u=${t%@*};; esac
+    scratch='C:\\Users\\'"$u"'\\gpu-work'
+  fi
   cat <<EOF
 
 Paste under "workers" (caps are a starting guess, 60% / 70% of ${total:-?} MiB: agree the real ones with the owner):
@@ -114,7 +133,7 @@ EOF
 cmd=${1:-}; shift || true
 case $cmd in
   scan) scan ;;
-  probe) probe "$@" ;;
+  probe) valid_target "${1:-}"; probe "$@" ;;
   stanza) stanza "$@" ;;
   *) sed -n '2,11p' "$0"; exit 1 ;;
 esac

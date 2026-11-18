@@ -20,7 +20,9 @@ A shared GPU box usually has someone else on it: an always-loaded model, another
 
 ## 0. Recruit a worker (new PC)
 
-When the user wants to use a PC that isn't a worker yet, or a worker can't be reached, follow [references/recruit.md](references/recruit.md) and check each layer with `scripts/recruit.sh`, all read-only:
+The scripts are in this skill's own `scripts/` folder (installed as a plugin: `${CLAUDE_PLUGIN_ROOT}/skills/gpu-job/scripts/`; as a plain skill: `~/.claude/skills/gpu-job/scripts/`). They are not on the PATH: call them by that path. Below, `recruit.sh` and `gpu-job.sh` mean those files.
+
+When the user wants to use a PC that isn't a worker yet, or a worker can't be reached, follow [references/recruit.md](references/recruit.md) and check each layer with `recruit.sh`, all read-only:
 
 ```sh
 recruit.sh scan                       # Tailscale: is this machine on, which PCs are online, direct or relayed
@@ -28,11 +30,11 @@ recruit.sh probe <user>@<machine>     # key-only SSH, OS, nvidia-smi, free VRAM,
 recruit.sh stanza <name> <user>@<machine>   # a gpu-workers.json entry to paste in
 ```
 
-Installing Tailscale, logging in, creating the job user, starting sshd, adding the key and changing power settings are **the PC owner's steps**: give them the commands from the guide for their OS, wait, then re-probe. Never type a password, approve a login or change a machine's security or system settings yourself, and recruit only PCs the owner says may be used. The usual snags: Tailscale key expiry (disable it for workers), a Windows admin account's key belonging in `C:\ProgramData\ssh\administrators_authorized_keys`, the job user missing the `video`/`render` group on Linux, and a Windows PC that sleeps.
+Installing Tailscale, logging in, creating the job user, starting sshd, adding the key and changing power settings are **the PC owner's steps**: give them the commands from the guide for their OS, wait, then re-probe. Never type a password, approve a login or change a machine's security or system settings yourself, and recruit only PCs the owner says may be used. The usual snags: Tailscale key expiry (disable it for workers), a Windows admin account's key belonging in `C:\ProgramData\ssh\administrators_authorized_keys`, the job user missing the `render` group on Linux (only when `nvidia-smi` fails for that user), and a Windows PC that sleeps.
 
 ## 1. The config
 
-The scripts read `$GPU_WORKERS`, else `./gpu-workers.json`, else `~/.config/gpu-job/workers.json`. Start from [references/gpu-workers.example.json](references/gpu-workers.example.json); every field is in [references/config.md](references/config.md). If there is no config, ask the user for each worker's SSH target, GPU, scratch folder and the box's rules (whoever runs the box usually has them written down: read them, don't guess), then write it.
+The scripts read `$GPU_WORKERS` if it is set, else `~/.config/gpu-job/workers.json`. They never pick up a config from the current folder: a config's `ssh` target and broker commands run on this machine and the worker, so one shipped inside a cloned repo must not take effect by accident. Numbers in it must be whole numbers, and `ssh` a plain `user@host` or Host alias (both checked). Start from [references/gpu-workers.example.json](references/gpu-workers.example.json); every field is in [references/config.md](references/config.md). If there is no config, ask the user for each worker's SSH target, GPU, scratch folder and the box's rules (whoever runs the box usually has them written down: read them, don't guess), then write it.
 
 `scripts/gpu-job.sh list` shows what is configured.
 
@@ -53,7 +55,7 @@ A **lane** is a set of limits the box's owner agreed to: a VRAM cap for your job
 ## 4. Run
 
 ```sh
-S=<skill>/scripts
+S=${CLAUDE_PLUGIN_ROOT}/skills/gpu-job/scripts      # or ~/.claude/skills/gpu-job/scripts
 # one command
 $S/gpu-job.sh run gpu1 --id depth-tile-07 --purpose "Depth map for the city plate" --eta 15 \
   --put ./inputs/plate.png -- python3 depth.py in/plate.png out/plate-depth.png
@@ -61,33 +63,35 @@ $S/gpu-job.sh run gpu1 --id depth-tile-07 --purpose "Depth map for the city plat
 # a render in chunks: {start} {end} per chunk; it resumes from the chunks already done
 $S/gpu-job.sh run gpu1 --id garden-01 --purpose "Night garden, 120 frames" --eta 90 \
   --put ./garden.blend --frames 1-120 --chunk 10 -- \
-  ~/blender/blender -b in/garden.blend -t 4 -o //out/f_#### -s {start} -e {end} -a
+  '~/blender/blender' -b in/garden.blend -t 4 -o out/f_#### -s '{start}' -e '{end}' -a
 ```
 
-The job runs in `<scratch>/jobs/<id>/`: inputs in `in/`, results in `out/`, the log in `job.log`, its own `STATUS`. It is started detached (it survives your SSH session) under `scripts/guard.sh`, which:
+The command runs **in** `<scratch>/jobs/<id>/` on the worker: inputs in `in/`, results in `out/`, the log in `job.log`, its own `STATUS`. Write outputs to `out/...` relative to that folder (for Blender, `-o out/f_####`, not `//out/...`, which is relative to the .blend in `in/` and lands in `in/out/` where fetch never looks). Quote `'{start}'` and `'{end}'` too, so no local shell touches the braces. Paths in the command are the worker's: quote a `~/...` program path (`'~/blender/blender'`) so your own shell leaves it alone; the guard expands a leading `~/` in the command's first word on the worker. Or use a program on the worker's PATH, or an absolute path. It is started detached (it survives your SSH session) under `scripts/guard.sh`, which:
 
 - **waits before each chunk** while the STOP file exists, the GPU is at or above `max_temp_c`, or free VRAM is under the lane's `min_free_mib`;
 - runs the command with `nice` and a thread cap (`OMP_NUM_THREADS`; also pass the tool's own flag, e.g. Blender `-t 4`);
 - **every few seconds checks** the STOP file (kills the job, waits for STOP to clear, runs the chunk again), the job's own VRAM (kills it above the lane cap) and the time limit;
-- **keeps STATUS current**: job, who, lane, purpose, frames, pid, start, expected end, last chunk done, peak VRAM, state. It also writes the box's shared `status_file` if there is one, so the owner can see who is on the GPU without asking;
+- **keeps STATUS current**: job, who, lane, purpose, frames, pid, start, expected end, last chunk done, peak VRAM, state. If the box has a shared `status_file`, the guard keeps **its own block** there (between `### gpu-job <id> begin`/`end` lines, so jobs never overwrite each other) and removes it when it exits, however it exits;
+- **fails closed:** if `nvidia-smi` gives no usable reading it waits rather than starting a chunk, and kills the job after three unreadable VRAM readings in a row rather than run it unwatched;
+- reads one GPU: `gpu_index` in the config (default 0);
 - records finished chunks in `done`, so `--resume` with the same id continues where it stopped.
 
 **Chunks are what make pre-emption cheap.** A STOP costs at most one chunk. For Blender, render 5-10 frames per chunk with overwrite off and placeholders on, so a rerun skips frames already on disk.
 
-Use a new `--id` for each job; the script refuses to reuse one unless you pass `--resume`.
+Use a new `--id` for each job; the script refuses to reuse one unless you pass `--resume`, and refuses `--resume` while that job's guard is still running.
 
 ## 5. Watch, cancel
 
 - `gpu-job.sh status <worker> [<id>]`: the job's STATUS, the last log lines, the GPU now. Without an id, every job of yours on that worker.
 - `gpu-job.sh log <worker> <id> [lines]`.
-- `gpu-job.sh cancel <worker> <id>`: stops your own job (the guard and its children). It never touches anyone else's process, and leaves the files.
+- `gpu-job.sh cancel <worker> <id>`: stops your own job: it checks the guard is yours, sends TERM to the guard's whole process group (so children that re-parented go too), and KILL after 10 seconds if needed. It never touches anyone else's process, and leaves the files.
 - If the box's owner or another session asks you to stop, cancel at once, and say so. Their jobs come first.
 
 Report progress honestly: say a job is running only when STATUS says `running` and the updated time is recent.
 
 ## 6. Fetch, and where files live
 
-- `gpu-job.sh fetch <worker> <id> <dest>` copies `out/` back with rsync, skipping `*.tmp`/`*.part`, only once the job is `finished` (`--partial` for the chunks done so far). **It copies; it never removes anything from the worker.**
+- `gpu-job.sh fetch <worker> <id> <dest>` copies `out/` back with rsync, skipping `*.tmp`/`*.part`, only once the job is `finished`. `--partial` copies `out/` as it is at that moment: the finished chunks (listed in the job's `done` file) plus whatever the running chunk has written, which may be incomplete. Symlinks in `out/` are skipped, never followed. **It copies; it never removes anything from the worker.**
 - **Scratch stays on the worker:** bake caches, test frames, intermediate renders and exports belong in the worker's scratch folder, not on the local machine's disk. Pull back only what a local step needs, and only when it needs it.
 - **Never delete on the worker (or locally) without asking.** That includes your own old jobs. Offer a list with sizes; move to a holding folder rather than `rm` if the user agrees to tidy.
 - Don't put scratch under `/tmp` on Linux boxes: it is often RAM-backed.

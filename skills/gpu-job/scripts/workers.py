@@ -5,11 +5,14 @@
     workers.py show <worker>
     workers.py env  <worker> [lane]      # shell assignments, for eval
 
-The config is looked up in this order: $GPU_WORKERS, ./gpu-workers.json,
-~/.config/gpu-job/workers.json. See references/config.md for every field.
+The config is $GPU_WORKERS if set, else ~/.config/gpu-job/workers.json. It is never
+picked up from the current folder: its commands run on your machine and the worker,
+so a config shipped inside a cloned repo must not take effect by accident.
+See references/config.md for every field.
 """
 import json
 import os
+import re
 import shlex
 import sys
 
@@ -21,20 +24,33 @@ DEFAULTS = {
     "poll_seconds": 5,
     "max_hours": 3,
     "disk_min_free_gb": 20,
+    "gpu_index": 0,
 }
+# Every number reaches shell arithmetic on the worker: whole numbers only, checked here and again in guard.sh.
+INT_FIELDS = ("nice", "threads", "max_temp_c", "poll_seconds", "max_hours", "disk_min_free_gb", "gpu_index")
+LANE_INT_FIELDS = ("vram_cap_mib", "min_free_mib", "max_hours")
+SSH_TARGET = re.compile(r"^[A-Za-z0-9._%+@:\[\]-]+$")
 LANE_DEFAULTS = {"approval": False, "vram_cap_mib": 3000, "min_free_mib": 5120}
 
 
 def find_config():
-    for p in (
-        os.environ.get("GPU_WORKERS"),
-        os.path.join(os.getcwd(), "gpu-workers.json"),
-        os.path.expanduser("~/.config/gpu-job/workers.json"),
-    ):
-        if p and os.path.isfile(p):
-            return p
+    env = os.environ.get("GPU_WORKERS")
+    if env:
+        if not os.path.isfile(env):
+            sys.exit(f"gpu-job: GPU_WORKERS={env} is not a file")
+        return env
+    p = os.path.expanduser("~/.config/gpu-job/workers.json")
+    if os.path.isfile(p):
+        return p
     sys.exit("gpu-job: no config found. Copy references/gpu-workers.example.json to "
-             "~/.config/gpu-job/workers.json (or ./gpu-workers.json) and edit it.")
+             "~/.config/gpu-job/workers.json (or point $GPU_WORKERS at one) and edit it.")
+
+
+def whole(where, key, v, lo=0, hi=None):
+    if isinstance(v, bool) or not isinstance(v, int) or v < lo or (hi is not None and v > hi):
+        rng = f"{lo}..{hi}" if hi is not None else f">= {lo}"
+        sys.exit(f"gpu-job: {where} '{key}' must be a whole number {rng} (got {v!r})")
+    return v
 
 
 def load():
@@ -58,6 +74,14 @@ def worker(cfg, name):
     out.update(w)
     if not out.get("lanes"):
         out["lanes"] = {"A": {}}
+    ssh = out["ssh"]
+    if not isinstance(ssh, str) or ssh.startswith("-") or not SSH_TARGET.match(ssh):
+        sys.exit(f"gpu-job: worker '{name}' ssh must be user@host or a Host alias "
+                 f"(letters, digits, . _ - @ :), not starting with '-' (got {ssh!r})")
+    for k in INT_FIELDS:
+        whole(f"worker '{name}'", k, out[k], hi=19 if k == "nice" else None)
+    if out["poll_seconds"] < 1 or out["threads"] < 1 or out["max_hours"] < 1:
+        sys.exit(f"gpu-job: worker '{name}': poll_seconds, threads and max_hours must be at least 1")
     return out
 
 
@@ -70,6 +94,11 @@ def lane(w, name):
     out = dict(LANE_DEFAULTS)
     out.update(lanes[name])
     out["name"] = name
+    if not re.match(r"^[A-Za-z0-9._-]+$", name):
+        sys.exit(f"gpu-job: lane names are letters, digits, . _ - (got {name!r})")
+    for k in LANE_INT_FIELDS:
+        if k in out:
+            whole(f"lane '{name}'", k, out[k], lo=1 if k == "max_hours" else 0)
     return out
 
 
@@ -107,6 +136,7 @@ def main(argv):
             "GJ_MAX_HOURS": ln.get("max_hours", w["max_hours"]),
             "GJ_DISK_MIN_GB": w["disk_min_free_gb"],
             "GJ_PROTECTED": " ".join(w.get("protected_processes", [])),
+            "GJ_GPU": w["gpu_index"],
             "GJ_LANE": ln["name"],
             "GJ_LANE_APPROVAL": "1" if ln["approval"] else "0",
             "GJ_CAP": ln["vram_cap_mib"],

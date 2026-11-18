@@ -1,8 +1,22 @@
 {
   "name": "gpu-job",
   "description": "Run jobs on a shared remote GPU box without stepping on anyone.",
-  "owner": { "name": "skyeyesec333" },
+  "owner": {
+    "name": "skyeyesec333"
+  },
   "plugins": [
-    { "name": "gpu-job", "source": "./", "description": "Skill: gpu-job. Preflight, lanes, a STOP-aware guard, status files and copy-only fetches for shared GPU workers over SSH.", "category": "development", "tags": ["gpu", "render", "blender", "ssh"] }
+    {
+      "name": "gpu-job",
+      "source": "./",
+      "description": "Skill: gpu-job. Preflight, lanes, a STOP-aware guard, status files and copy-only fetches for shared GPU workers over SSH.",
+      "category": "development",
+      "tags": [
+        "gpu",
+        "render",
+        "blender",
+        "ssh"
+      ],
+      "version": "0.1.1"
+    }
   ]
 }
