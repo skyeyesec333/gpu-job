@@ -1,0 +1,44 @@
+{
+  "defaults": {
+    "nice": 10,
+    "threads": 4,
+    "max_temp_c": 83,
+    "poll_seconds": 5,
+    "max_hours": 3,
+    "disk_min_free_gb": 20
+  },
+  "workers": {
+    "gpu1": {
+      "ssh": "worker@gpu1.example",
+      "os": "linux",
+      "gpu": "RTX 3080 Ti 12 GB",
+      "scratch": "~/gpu-work",
+      "stop_file": "/srv/gpu-control/STOP",
+      "status_file": "/srv/gpu-control/STATUS.txt",
+      "protected_processes": ["voice-server", "inference-api"],
+      "notes": "Shared with an always-on voice model (~6 GB). Its jobs pre-empt ours.",
+      "lanes": {
+        "A": {
+          "vram_cap_mib": 3000,
+          "min_free_mib": 5120
+        },
+        "B": {
+          "approval": true,
+          "vram_cap_mib": 8192,
+          "min_free_mib": 9216,
+          "max_hours": 6,
+          "request_cmd": "/srv/gpu-control/bin/gpu-broker request --id {id} --eta {eta} --need {need} --purpose {purpose}",
+          "wrap_cmd": "/srv/gpu-control/bin/gpu-broker run --grant {id} --",
+          "release_cmd": "/srv/gpu-control/bin/gpu-broker release --id {id}"
+        }
+      }
+    },
+    "gpu2": {
+      "ssh": "user@gpu2.example",
+      "os": "windows",
+      "gpu": "RTX 3070 8 GB",
+      "scratch": "C:\\Users\\user\\gpu-work",
+      "lanes": { "A": { "vram_cap_mib": 6500, "min_free_mib": 7000 } }
+    }
+  }
+}
