@@ -10,11 +10,12 @@ It was built for a home lab where one RTX card also hosts an always-on voice mod
 
 ## What the skill does
 
-1. **Reads a small config** (`gpu-workers.json`) listing your workers and their **lanes**: a VRAM cap for your job, the free VRAM needed before it starts, a time limit, and whether the lane needs the box owner's approval.
-2. **Preflights the box, read-only:** SSH, free VRAM, temperature, who else is on the GPU, the STOP file, disk space, the shared status file.
-3. **Runs your job detached under a guard** (`guard.sh`, on the worker) that waits for room before each chunk, runs it with `nice` and a thread cap, kills it if a STOP file appears, if it passes its VRAM cap or its time limit, keeps a STATUS file current, and resumes from finished chunks.
-4. **Follows the etiquette:** free lanes without asking, approval lanes never without the owner's yes, tell the other sessions before and after, keep scratch on the worker, never delete there without asking.
-5. **Fetches results back with rsync, copy only**: nothing on the worker is removed.
+1. **Recruits PCs on your network** (`recruit.sh`, [guide](skills/gpu-job/references/recruit.md)): checks Tailscale and lists the machines on your tailnet, walks the PC's owner through Tailscale, an SSH server, a job user and a key (Linux and Windows), then probes the PC over SSH for the driver, free VRAM, disk, Blender and sleep settings, and prints its config entry.
+2. **Reads a small config** (`gpu-workers.json`) listing your workers and their **lanes**: a VRAM cap for your job, the free VRAM needed before it starts, a time limit, and whether the lane needs the box owner's approval.
+3. **Preflights the box, read-only:** SSH, free VRAM, temperature, who else is on the GPU, the STOP file, disk space, the shared status file.
+4. **Runs your job detached under a guard** (`guard.sh`, on the worker) that waits for room before each chunk, runs it with `nice` and a thread cap, kills it if a STOP file appears, if it passes its VRAM cap or its time limit, keeps a STATUS file current, and resumes from finished chunks.
+5. **Follows the etiquette:** free lanes without asking, approval lanes never without the owner's yes, tell the other sessions before and after, keep scratch on the worker, never delete there without asking.
+6. **Fetches results back with rsync, copy only**: nothing on the worker is removed.
 
 ## Install
 
@@ -27,7 +28,7 @@ It was built for a home lab where one RTX card also hosts an always-on voice mod
 
 **Or as a plain skill:** copy `skills/gpu-job` into `~/.claude/skills/` (all your projects) or into a project's `.claude/skills/`.
 
-Then describe your worker in `~/.config/gpu-job/workers.json`, starting from [`references/gpu-workers.example.json`](skills/gpu-job/references/gpu-workers.example.json), or just ask Claude to set it up and answer its questions.
+No worker yet? Ask Claude to "recruit my gaming PC as a GPU worker": it checks Tailscale, gives the PC's owner the setup commands, and writes the config entry once the PC answers. Or describe your worker yourself in `~/.config/gpu-job/workers.json`, starting from [`references/gpu-workers.example.json`](skills/gpu-job/references/gpu-workers.example.json), or just ask Claude to set it up and answer its questions.
 
 ## Use
 
@@ -50,7 +51,7 @@ gpu-job.sh fetch gpu1 garden-01 ./renders/garden
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code)
-- Locally: bash, Python 3, ssh, rsync
+- Locally: bash, Python 3, ssh, rsync; [Tailscale](https://tailscale.com) to reach workers away from home (or the same LAN)
 - The worker: Linux with an NVIDIA GPU (`nvidia-smi`), bash, SSH key access. Windows workers are covered by a manual guide (`references/windows.md`).
 
 ## Licence

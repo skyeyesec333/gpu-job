@@ -8,6 +8,7 @@ description: Run heavy GPU jobs (Blender/Cycles renders and bakes, ML inference,
 A shared GPU box usually has someone else on it: an always-loaded model, another agent session, the owner's own work. This skill runs your job there as a guest: it checks the box first, starts only when the rules say there is room, steps aside the moment the owner asks, keeps a status file others can read, and leaves its working files on the box.
 
 ```
+0. recruit    a GPU PC on your network: Tailscale, SSH, driver           (once per PC, the owner's hands)
 1. config     gpu-workers.json: the workers, their lanes and limits           (once)
 2. preflight  scripts/gpu-job.sh preflight <worker>                            (read-only)
 3. tell       other sessions sharing the box: what, which lane, how long
@@ -16,6 +17,18 @@ A shared GPU box usually has someone else on it: an always-loaded model, another
 6. fetch      scripts/gpu-job.sh fetch <worker> <id> <dest>                    (copy only)
 7. tell       the other sessions it is done; release the lane if it had a grant
 ```
+
+## 0. Recruit a worker (new PC)
+
+When the user wants to use a PC that isn't a worker yet, or a worker can't be reached, follow [references/recruit.md](references/recruit.md) and check each layer with `scripts/recruit.sh`, all read-only:
+
+```sh
+recruit.sh scan                       # Tailscale: is this machine on, which PCs are online, direct or relayed
+recruit.sh probe <user>@<machine>     # key-only SSH, OS, nvidia-smi, free VRAM, disk, Blender, sleep setting
+recruit.sh stanza <name> <user>@<machine>   # a gpu-workers.json entry to paste in
+```
+
+Installing Tailscale, logging in, creating the job user, starting sshd, adding the key and changing power settings are **the PC owner's steps**: give them the commands from the guide for their OS, wait, then re-probe. Never type a password, approve a login or change a machine's security or system settings yourself, and recruit only PCs the owner says may be used. The usual snags: Tailscale key expiry (disable it for workers), a Windows admin account's key belonging in `C:\ProgramData\ssh\administrators_authorized_keys`, the job user missing the `video`/`render` group on Linux, and a Windows PC that sleeps.
 
 ## 1. The config
 
@@ -97,5 +110,6 @@ The scripts drive Linux workers. For a Windows box over OpenSSH, follow [referen
 
 - `scripts/gpu-job.sh`: the local command (list, preflight, run, status, log, fetch, cancel, release).
 - `scripts/guard.sh`: runs on the worker around your command; copied there by `run`.
+- `scripts/recruit.sh`: finds and checks a new worker (scan, probe, stanza); read-only.
 - `scripts/workers.py`: reads the config (Python 3, standard library only).
-- `references/config.md`, `references/gpu-workers.example.json`, `references/windows.md`.
+- `references/recruit.md` (Tailscale, SSH and driver setup for a new PC), `references/config.md`, `references/gpu-workers.example.json`, `references/windows.md`.
