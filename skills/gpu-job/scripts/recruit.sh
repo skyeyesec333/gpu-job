@@ -10,30 +10,35 @@
 # (references/recruit.md has them). SSH runs with BatchMode, so a machine without your key just says so.
 set -uo pipefail
 die() { echo "recruit: $*" >&2; exit 1; }
+# What a remote machine reports is untrusted: keep printable plain text only, and numbers as digits only.
+clean() { LC_ALL=C tr -cd '[:alnum:] ._()@:/+-' <<<"$1"; }
+digits() { [[ $1 =~ ^[0-9]+$ ]] && echo "$1" || echo ""; }
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new)
 
 scan() {
   command -v tailscale >/dev/null || die "tailscale is not installed here (https://tailscale.com/download), or use LAN addresses with 'probe'"
   local js; js=$(tailscale status --json 2>/dev/null) || die "tailscale is installed but not running or not logged in: run 'tailscale up' (or open the app)"
   python3 - "$js" <<'PY'
-import json, sys
+import json, re, sys
 s = json.loads(sys.argv[1])
+def c(v):  # peer metadata is set by whoever controls that machine: printable ASCII only
+    return re.sub(r"[^\x20-\x7e]", "?", str(v if v is not None else "?"))
 if s.get("BackendState") != "Running":
     sys.exit(f"tailscale is {s.get('BackendState')}: log in / connect first")
 me = s.get("Self", {})
-print(f"this machine: {me.get('HostName')} ({(me.get('TailscaleIPs') or ['?'])[0]}), tailnet {s.get('CurrentTailnet', {}).get('Name', '?')}")
+print(f"this machine: {c(me.get('HostName'))} ({c((me.get('TailscaleIPs') or ['?'])[0])}), tailnet {c(s.get('CurrentTailnet', {}).get('Name', '?'))}")
 peers = sorted((s.get("Peer") or {}).values(), key=lambda p: (not p.get("Online"), p.get("HostName", "").lower()))
 if not peers:
     sys.exit("no other machines on this tailnet yet: install Tailscale on the GPU PC and log in with the same account")
 print(f"\n{'':2}{'machine':24}{'os':10}{'address':17}{'MagicDNS name':38}state")
 for p in peers:
-    dns = (p.get("DNSName") or "").rstrip(".")
-    ip = (p.get("TailscaleIPs") or ["?"])[0]
+    dns = c((p.get("DNSName") or "").rstrip("."))
+    ip = c((p.get("TailscaleIPs") or ["?"])[0])
     state = "online" if p.get("Online") else "offline"
     if p.get("Online") and p.get("CurAddr"): state += ", direct"
-    elif p.get("Online") and p.get("Relay"): state += f", relayed ({p['Relay']})"
-    if p.get("KeyExpiry"): state += f", key expires {p['KeyExpiry'][:10]}"
-    print(f"  {p.get('HostName','?')[:23]:24}{p.get('OS','?'):10}{ip:17}{dns[:37]:38}{state}")
+    elif p.get("Online") and p.get("Relay"): state += f", relayed ({c(p['Relay'])})"
+    if p.get("KeyExpiry"): state += f", key expires {c(p['KeyExpiry'][:10])}"
+    print(f"  {c(p.get('HostName','?'))[:23]:24}{c(p.get('OS','?'))[:9]:10}{ip:17}{dns[:37]:38}{state}")
 print("\nGPU candidates are usually the online windows/linux desktops. Next: recruit.sh probe <user>@<machine>")
 PY
 }
@@ -58,6 +63,7 @@ probe() {
   local g; g=$(ssh "${SSH_OPTS[@]}" "$t" "nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader,nounits" 2>/dev/null | tr -d '\r' | head -1)
   if [ -n "$g" ]; then
     IFS=, read -r name total free drv <<<"$g"
+    name=$(clean "$name"); total=$(digits "${total// /}"); free=$(digits "${free// /}"); drv=$(clean "$drv")
     echo "ok    GPU ${name% }: ${total# } MiB, ${free# } MiB free now, driver ${drv# }"
   else
     echo "FAIL  nvidia-smi did not answer: no NVIDIA GPU, no driver, or not on PATH for this user"
@@ -85,11 +91,12 @@ if($l){$p=[Convert]::ToInt32((($l.Line -split ": ")[1]).Trim(),16); if($p -gt 0)
 
 stanza() {
   local n=${1:?name} t=${2:?ssh target}
+  [[ $n =~ ^[A-Za-z0-9._-]+$ && $t =~ ^[A-Za-z0-9._@-]+$ ]] || die "name and target: letters, digits, . _ - @ only"
   probe "$t" || exit 1
   local os; os=$(ssh "${SSH_OPTS[@]}" "$t" "uname -s" 2>/dev/null | tr -d '\r'); [ -n "$os" ] || os=Windows
   local g; g=$(ssh "${SSH_OPTS[@]}" "$t" "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits" 2>/dev/null | tr -d '\r' | head -1)
-  IFS=, read -r name total <<<"$g"; total=${total// /}
-  local cap=$(( ${total:-8192} * 6 / 10 )) need=$(( ${total:-8192} * 7 / 10 ))
+  IFS=, read -r name total <<<"$g"; name=$(clean "$name"); total=$(digits "${total// /}")
+  local base=${total:-8192}; local cap=$(( base * 6 / 10 )) need=$(( base * 7 / 10 ))
   local los=linux scratch='~/gpu-work'; [ "$os" = Windows ] && { los=windows; scratch='C:\\Users\\'"${t%@*}"'\\gpu-work'; }
   cat <<EOF
 
