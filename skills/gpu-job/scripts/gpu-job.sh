@@ -18,6 +18,9 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 die() { echo "gpu-job: $*" >&2; exit 1; }
+# Everything that reaches the worker's shell is either checked against these or quoted with printf %q.
+valid_id() { [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] || die "job id: letters, digits, . _ - only"; }
+valid_int() { [[ $2 =~ ^[0-9]+$ ]] || die "$1 must be a whole number"; }
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
 
 load() {  # load <worker> [lane]
@@ -30,7 +33,7 @@ rsh() { ssh "${SSH_OPTS[@]}" "$GJ_SSH" "$@"; }
 rbash() {
   { printf 'SCRATCH=%q; SCRATCH="${SCRATCH/#\\~/$HOME}"; STOP=%q; STATUSF=%q; MIN_FREE=%q; MAX_TEMP=%q; DISK_MIN=%q; PROTECTED=%q; ME=$(id -un)\n' \
       "$GJ_SCRATCH" "$GJ_STOP" "$GJ_STATUS" "$GJ_MIN_FREE" "$GJ_MAX_TEMP" "$GJ_DISK_MIN_GB" "$GJ_PROTECTED"
-    cat; } | rsh bash -s -- "$@"
+    cat; } | if [ $# -gt 0 ]; then rsh bash -s -- "$(printf '%q ' "$@")"; else rsh bash -s; fi
 }
 
 cmd=${1:-}; [ -n "$cmd" ] || { sed -n '2,20p' "$0"; exit 1; }; shift
@@ -74,15 +77,17 @@ run)
     --who) WHO=$2; shift 2;; --put) PUTS+=("$2"); shift 2;; --frames) FRAMES=$2; shift 2;; --chunk) CHUNK=$2; shift 2;;
     --owner-approved) APPROVED=1; shift;; --resume) RESUME=1; shift;; --) shift; break;; *) die "unknown $1";; esac; done
   [ $# -gt 0 ] || die "give the command after --"
-  [[ $ID =~ ^[A-Za-z0-9._-]+$ ]] || die "--id: letters, digits, . _ - only"
+  valid_id "$ID"
   [ -n "$PURPOSE" ] || die "--purpose is required (it goes into the status file others read)"
   [[ $ETA =~ ^[0-9]+$ ]] || die "--eta MINUTES is required"
   [ "$FRAMES" = "-" ] || [[ $FRAMES =~ ^[0-9]+-[0-9]+$ ]] || die "--frames START-END"
+  [[ $CHUNK =~ ^[1-9][0-9]*$ ]] || die "--chunk must be a positive whole number"
   load "$W" ${LANE:+"$LANE"}
   if [ "$GJ_LANE_APPROVAL" = 1 ]; then
     [ $APPROVED = 1 ] || die "lane $GJ_LANE needs the box owner's approval. Ask them; pass --owner-approved only after they said yes."
     if [ -n "$GJ_REQUEST" ]; then
-      req=${GJ_REQUEST//\{id\}/$ID}; req=${req//\{eta\}/$ETA}; req=${req//\{need\}/$GJ_CAP}; req=${req//\{purpose\}/$(printf %q "$PURPOSE")}
+      valid_int "the lane's VRAM cap" "$GJ_CAP"
+      req=${GJ_REQUEST//\{id\}/$(printf %q "$ID")}; req=${req//\{eta\}/$(printf %q "$ETA")}; req=${req//\{need\}/$(printf %q "$GJ_CAP")}; req=${req//\{purpose\}/$(printf %q "$PURPOSE")}
       echo "requesting lane $GJ_LANE: $req"
       rsh "$req" || die "the lane's request was not granted (exit $?)"
       GJ_WRAP=${GJ_WRAP//\{id\}/$ID}
@@ -103,12 +108,12 @@ EOF
     printf 'GJ_WHO=%q\nGJ_PURPOSE=%q\n' "$WHO" "$PURPOSE"
   } | rsh "cat > $(printf %q "$RJOB")/guard.env"
   q=$(printf '%q ' "$@")
-  rsh "cd $(printf %q "$RJOB") && chmod +x guard.sh && (setsid nohup ./guard.sh $(printf %q "$RJOB") $(printf %q "$ID") $ETA $FRAMES $CHUNK -- $q </dev/null >/dev/null 2>&1 &) && sleep 2 && cat STATUS 2>/dev/null"
+  rsh "cd $(printf %q "$RJOB") && chmod +x guard.sh && (setsid nohup ./guard.sh $(printf %q "$RJOB") $(printf %q "$ID") $(printf %q "$ETA") $(printf %q "$FRAMES") $(printf %q "$CHUNK") -- $q </dev/null >/dev/null 2>&1 &) && sleep 2 && cat STATUS 2>/dev/null"
   echo "started $ID on $GJ_WORKER in $RJOB (lane $GJ_LANE). Follow it: gpu-job.sh status $W $ID"
   ;;
 
 status)
-  W=${1:?worker}; ID=${2:-}; load "$W"
+  W=${1:?worker}; ID=${2:-}; [ -z "$ID" ] || valid_id "$ID"; load "$W"
   rbash "$ID" <<'EOF'
 if [ -n "$1" ]; then cat "$SCRATCH/jobs/$1/STATUS" 2>/dev/null || echo "no job $1"; echo "--"; tail -n 5 "$SCRATCH/jobs/$1/job.log" 2>/dev/null
 else for s in "$SCRATCH"/jobs/*/STATUS; do [ -e "$s" ] && { echo "== $(basename "$(dirname "$s")")"; grep -E '^(state|lane|last chunk done|peak|updated):' "$s"; }; done; fi
@@ -118,14 +123,14 @@ exit 0
 EOF
   ;;
 
-log) W=${1:?worker}; ID=${2:?id}; N=${3:-40}; load "$W"
+log) W=${1:?worker}; ID=${2:?id}; N=${3:-40}; valid_id "$ID"; valid_int "line count" "$N"; load "$W"
   rbash "$ID" "$N" <<'EOF'
 tail -n "$2" "$SCRATCH/jobs/$1/job.log"
 EOF
   ;;
 
 fetch)
-  W=${1:?worker}; ID=${2:?id}; DEST=${3:?dest}; PARTIAL=0; [ "${4:-}" = "--partial" ] && PARTIAL=1; load "$W"
+  W=${1:?worker}; ID=${2:?id}; DEST=${3:?dest}; PARTIAL=0; [ "${4:-}" = "--partial" ] && PARTIAL=1; valid_id "$ID"; load "$W"
   st=$(rbash "$ID" <<'EOF'
 sed -n 's/^state: //p' "$SCRATCH/jobs/$1/STATUS" 2>/dev/null
 EOF
@@ -140,7 +145,7 @@ EOF
   ;;
 
 cancel)
-  W=${1:?worker}; ID=${2:?id}; load "$W"
+  W=${1:?worker}; ID=${2:?id}; valid_id "$ID"; load "$W"
   rbash "$ID" <<'EOF'
 g=$(cat "$SCRATCH/jobs/$1/guard.pid" 2>/dev/null) || { echo "no guard pid for $1"; exit 1; }
 [ "$(ps -o user= -p "$g" 2>/dev/null | tr -d ' ')" = "$ME" ] || { echo "guard $g is not mine or not running"; exit 1; }
@@ -152,9 +157,9 @@ EOF
   ;;
 
 release)
-  W=${1:?worker}; ID=${2:?id}; shift 2; LANE=""; [ "${1:-}" = "--lane" ] && LANE=$2; load "$W" ${LANE:+"$LANE"}
+  W=${1:?worker}; ID=${2:?id}; valid_id "$ID"; shift 2; LANE=""; [ "${1:-}" = "--lane" ] && LANE=$2; load "$W" ${LANE:+"$LANE"}
   [ -n "$GJ_RELEASE" ] || { echo "lane $GJ_LANE has no release step"; exit 0; }
-  rsh "${GJ_RELEASE//\{id\}/$ID}" && echo "released lane $GJ_LANE for $ID"
+  rsh "${GJ_RELEASE//\{id\}/$(printf %q "$ID")}" && echo "released lane $GJ_LANE for $ID"
   ;;
 
 *) die "unknown command '$cmd' (list, preflight, run, status, log, fetch, cancel, release)" ;;
