@@ -9,7 +9,7 @@ How to turn a PC with an NVIDIA card (a gaming desktop, a spare workstation, a h
 4. config    a gpu-workers.json entry, the box's rules, then preflight
 ```
 
-`recruit.sh` (in this skill's `scripts/` folder; installed as a plugin that is `${CLAUDE_PLUGIN_ROOT}/skills/gpu-job/scripts/recruit.sh`) checks each layer **read-only**: `scan` lists the tailnet's machines, `probe <user>@<machine>` tests SSH and the GPU, `stanza <name> <user>@<machine>` prints a config entry to paste in. Its first connection to a machine records the machine's host key in your `~/.ssh/known_hosts` (`StrictHostKeyChecking=accept-new`); a key that changes later is refused.
+`recruit.sh` (in this skill's `scripts/` folder: `${CLAUDE_SKILL_DIR}/scripts/recruit.sh`) checks each layer **read-only**: `scan` lists the tailnet's machines, `probe <user>@<machine>` tests SSH and the GPU, `stanza <name> <user>@<machine>` prints a config entry to paste in. Its first connection to a machine records the machine's host key in your `~/.ssh/known_hosts` (`StrictHostKeyChecking=accept-new`); a key that changes later is refused.
 
 **Who does what.** Installing software, logging in to Tailscale, creating users, starting services, opening firewall rules, changing power settings and copying keys are done **by the PC's owner, at the PC or in their own terminal**. Claude gives the exact commands and checks the result with `recruit.sh`; it does not type passwords, approve logins, or change a machine's security or system settings itself. Recruit only machines the owner says may be used.
 

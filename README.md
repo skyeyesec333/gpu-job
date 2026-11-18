@@ -38,7 +38,7 @@ Just ask:
 - "Is the worker free? Run the depth model on these three images there"
 - "Check on the render and pull the finished frames back"
 
-The scripts also work by hand. They live in the skill's `scripts/` folder, not on your PATH: `~/.claude/skills/gpu-job/scripts/` for a plain-skill install, `${CLAUDE_PLUGIN_ROOT}/skills/gpu-job/scripts/` inside Claude Code for a plugin install.
+The scripts also work by hand. They live in the skill's `scripts/` folder, not on your PATH: `~/.claude/skills/gpu-job/scripts/` for a plain-skill install, inside Claude Code's plugin cache for a plugin install (`/plugin` shows where). Claude itself finds them through `${CLAUDE_SKILL_DIR}`.
 
 ```sh
 S=~/.claude/skills/gpu-job/scripts

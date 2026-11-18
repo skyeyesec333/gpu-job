@@ -20,7 +20,7 @@ A shared GPU box usually has someone else on it: an always-loaded model, another
 
 ## 0. Recruit a worker (new PC)
 
-The scripts are in this skill's own `scripts/` folder (installed as a plugin: `${CLAUDE_PLUGIN_ROOT}/skills/gpu-job/scripts/`; as a plain skill: `~/.claude/skills/gpu-job/scripts/`). They are not on the PATH: call them by that path. Below, `recruit.sh` and `gpu-job.sh` mean those files.
+The scripts are in this skill's own `scripts/` folder (`${CLAUDE_SKILL_DIR}/scripts/`, for a plugin or a copied skill alike). They are not on the PATH: call them by that path. Below, `recruit.sh` and `gpu-job.sh` mean those files.
 
 When the user wants to use a PC that isn't a worker yet, or a worker can't be reached, follow [references/recruit.md](references/recruit.md) and check each layer with `recruit.sh`, all read-only:
 
@@ -55,7 +55,7 @@ A **lane** is a set of limits the box's owner agreed to: a VRAM cap for your job
 ## 4. Run
 
 ```sh
-S=${CLAUDE_PLUGIN_ROOT}/skills/gpu-job/scripts      # or ~/.claude/skills/gpu-job/scripts
+S="${CLAUDE_SKILL_DIR}/scripts"
 # one command
 $S/gpu-job.sh run gpu1 --id depth-tile-07 --purpose "Depth map for the city plate" --eta 15 \
   --put ./inputs/plate.png -- python3 depth.py in/plate.png out/plate-depth.png
